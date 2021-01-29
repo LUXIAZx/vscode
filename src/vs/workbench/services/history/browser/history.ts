@@ -9,7 +9,7 @@ import { ITextEditorOptions, IResourceEditorInput, TextEditorSelectionRevealType
 import { IEditorInput, IEditorPane, Extensions as EditorExtensions, EditorInput, IEditorCloseEvent, IEditorInputFactoryRegistry, EditorResourceAccessor, IEditorIdentifier, GroupIdentifier, EditorsOrder, SideBySideEditor } from 'vs/workbench/common/editor';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IHistoryService } from 'vs/workbench/services/history/common/history';
-import { FileChangesEvent, IFileService, FileChangeType, FILES_EXCLUDE_CONFIG, FileOperationEvent, FileOperation } from 'vs/platform/files/common/files';
+import { FileChangesEvent, IFileService, FileChangeType, FILES_EXCLUDE_CONFIG } from 'vs/platform/files/common/files';
 import { Selection } from 'vs/editor/common/core/selection';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { dispose, Disposable, DisposableStore } from 'vs/base/common/lifecycle';
@@ -133,7 +133,6 @@ export class HistoryService extends Disposable implements IHistoryService {
 		this._register(this.editorService.onDidCloseEditor(event => this.onEditorClosed(event)));
 		this._register(this.storageService.onWillSaveState(() => this.saveState()));
 		this._register(this.fileService.onDidFilesChange(event => this.onDidFilesChange(event)));
-		this._register(this.fileService.onDidRunOperation(event => this.onDidRunOperation(event)));
 		this._register(this.editorService.onDidMostRecentlyActiveEditorsChange(() => this.handleEditorEventInRecentEditorsStack()));
 
 		// if the service is created late enough that an editor is already opened
@@ -233,14 +232,6 @@ export class HistoryService extends Disposable implements IHistoryService {
 		}
 	}
 
-	private onDidRunOperation(e: FileOperationEvent): void {
-		switch (e.operation) {
-			case FileOperation.DELETE:
-			case FileOperation.MOVE:
-				return this.remove(e);
-		}
-	}
-
 	private handleEditorSelectionChangeEvent(editor?: IEditorPane, event?: ICursorPositionChangedEvent): void {
 		this.handleEditorEventInNavigationStack(editor, event);
 	}
@@ -274,29 +265,21 @@ export class HistoryService extends Disposable implements IHistoryService {
 
 	remove(input: IEditorInput | IResourceEditorInput): void;
 	remove(input: FileChangesEvent): void;
-	remove(input: FileOperationEvent): void;
-	remove(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): void {
+	remove(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent): void {
 		this.removeFromHistory(arg1);
 		this.removeFromNavigationStack(arg1);
 		this.removeFromRecentlyClosedEditors(arg1);
 		this.removeFromRecentlyOpened(arg1);
 	}
 
-	private removeFromRecentlyOpened(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): void {
-		let resource: URI | undefined = undefined;
-		if (arg1 instanceof EditorInput) {
-			resource = arg1.resource;
-		} else if (arg1 instanceof FileChangesEvent) {
-			// Ignore for now (recently opened are most often out of workspace files anyway for which there are no file events)
-		} else if (arg1 instanceof FileOperationEvent) {
-			resource = arg1.resource;
-		} else {
-			resource = arg1.resource;
+	private removeFromRecentlyOpened(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent): void {
+		if (arg1 instanceof EditorInput || arg1 instanceof FileChangesEvent) {
+			return; // for now do not delete from file events since recently open are likely out of workspace files for which there are no delete events
 		}
 
-		if (resource) {
-			this.workspacesService.removeRecentlyOpened([resource]);
-		}
+		const input = arg1 as IResourceEditorInput;
+
+		this.workspacesService.removeRecentlyOpened([input.resource]);
 	}
 
 	clear(): void {
@@ -555,7 +538,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		return selectionA.startLineNumber === selectionB.startLineNumber; // we consider the history entry same if we are on the same line
 	}
 
-	private removeFromNavigationStack(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): void {
+	private removeFromNavigationStack(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent): void {
 		this.navigationStack = this.navigationStack.filter(e => {
 			const matches = this.matches(arg1, e.input);
 
@@ -573,7 +556,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		this.updateContextKeys();
 	}
 
-	private matches(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent, inputB: IEditorInput | IResourceEditorInput): boolean {
+	private matches(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent, inputB: IEditorInput | IResourceEditorInput): boolean {
 		if (arg1 instanceof FileChangesEvent) {
 			if (inputB instanceof EditorInput) {
 				return false; // we only support this for IResourceEditorInput
@@ -582,16 +565,6 @@ export class HistoryService extends Disposable implements IHistoryService {
 			const resourceEditorInputB = inputB as IResourceEditorInput;
 
 			return arg1.contains(resourceEditorInputB.resource, FileChangeType.DELETED);
-		}
-
-		if (arg1 instanceof FileOperationEvent) {
-			if (inputB instanceof EditorInput) {
-				return false; // we only support this for IResourceEditorInput
-			}
-
-			const resourceEditorInputB = inputB as IResourceEditorInput;
-
-			return this.matchesFile(resourceEditorInputB.resource, arg1);
 		}
 
 		if (arg1 instanceof EditorInput && inputB instanceof EditorInput) {
@@ -612,13 +585,9 @@ export class HistoryService extends Disposable implements IHistoryService {
 		return resourceEditorInputA && resourceEditorInputB && this.uriIdentityService.extUri.isEqual(resourceEditorInputA.resource, resourceEditorInputB.resource);
 	}
 
-	private matchesFile(resource: URI, arg2: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): boolean {
+	private matchesFile(resource: URI, arg2: IEditorInput | IResourceEditorInput | FileChangesEvent): boolean {
 		if (arg2 instanceof FileChangesEvent) {
 			return arg2.contains(resource, FileChangeType.DELETED);
-		}
-
-		if (arg2 instanceof FileOperationEvent) {
-			return this.uriIdentityService.extUri.isEqualOrParent(resource, arg2.resource);
 		}
 
 		if (arg2 instanceof EditorInput) {
@@ -757,7 +726,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		}
 	}
 
-	private removeFromRecentlyClosedEditors(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): void {
+	private removeFromRecentlyClosedEditors(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent): void {
 		this.recentlyClosedEditors = this.recentlyClosedEditors.filter(recentlyClosedEditor => {
 			if (recentlyClosedEditor.resource && this.matchesFile(recentlyClosedEditor.resource, arg1)) {
 				return false; // editor matches directly
@@ -887,7 +856,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		});
 	}
 
-	private removeFromHistory(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent | FileOperationEvent): void {
+	private removeFromHistory(arg1: IEditorInput | IResourceEditorInput | FileChangesEvent): void {
 		this.ensureHistoryLoaded(this.history);
 
 		this.history = this.history.filter(e => {

@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { globals, INodeProcess, IProcessEnvironment } from 'vs/base/common/platform';
+import { globals, IProcessEnvironment } from 'vs/base/common/platform';
 import { ProcessMemoryInfo, CrashReporter, IpcRenderer, WebFrame } from 'vs/base/parts/sandbox/electron-sandbox/electronTypes';
 
-export interface ISandboxNodeProcess extends INodeProcess {
+export interface ISandboxNodeProcess {
 
 	/**
 	 * The process.platform property returns a string identifying the operating system platform
